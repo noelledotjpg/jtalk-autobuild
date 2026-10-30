@@ -1,5 +1,9 @@
 name: Build open_jtalk
 
+# Expects the two official source tarballs committed in the repo:
+#   sources/hts_engine_API-1.10.tar.gz
+#   sources/open_jtalk-1.11.tar.gz
+
 on:
   workflow_dispatch:
   push:
@@ -17,70 +21,63 @@ jobs:
             name: linux
     runs-on: ${{ matrix.os }}
 
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+
+    env:
+      # Old 2018-era code: keep newer GCC from turning legacy C/C++ into hard errors.
+      CFLAGS: -O2 -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types
+      CXXFLAGS: -O2 -std=gnu++98
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: r9y9/hts_engine_API
-          path: hts_engine_API
 
-      # If you fork r9y9/open_jtalk, replace this with a plain `uses: actions/checkout@v4`
-      # and set path: open_jtalk, so the workflow builds your fork instead.
-      - uses: actions/checkout@v4
-        with:
-          repository: r9y9/open_jtalk
-          ref: '1.11'
-          path: open_jtalk
-
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: base-devel mingw-w64-x86_64-toolchain
 
-      - name: Install Ninja
+      - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: sudo apt-get update && sudo apt-get install -y build-essential
 
-      - name: Build hts_engine_API (static)
-        shell: bash
+      - name: Build hts_engine_API
         run: |
-          EXTRA=""
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            EXTRA="-DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-          fi
-          cmake -G Ninja -S hts_engine_API/src -B hts_engine_API/src/build \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF $EXTRA
-          cmake --build hts_engine_API/src/build
+          BUILD=""
+          if [ "${{ runner.os }}" = "Windows" ]; then BUILD="--build=x86_64-w64-mingw32"; fi
+          tar xzf sources/hts_engine_API-1.10.tar.gz
+          cd hts_engine_API-1.10
+          ./configure --prefix="$PWD/../hts-install" $BUILD
+          make
+          make install
 
-      - name: Build open_jtalk (static)
-        shell: bash
+      - name: Build open_jtalk
         run: |
-          EXTRA=""
+          BUILD=""
+          LDF="-static"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            EXTRA="-DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-          else
-            EXTRA="-DCMAKE_EXE_LINKER_FLAGS=-static"
+            BUILD="--build=x86_64-w64-mingw32"
+            LDF="-static -static-libgcc -static-libstdc++"
           fi
-          cmake -G Ninja -S open_jtalk/src -B open_jtalk/src/build \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_INCLUDE_PATH="${{ github.workspace }}/hts_engine_API/src/include" \
-            -DCMAKE_LIBRARY_PATH="${{ github.workspace }}/hts_engine_API/src/build/lib" \
-            $EXTRA
-          cmake --build open_jtalk/src/build
+          tar xzf sources/open_jtalk-1.11.tar.gz
+          cd open_jtalk-1.11
+          ./configure \
+            --with-hts-engine-header-path="$PWD/../hts-install/include" \
+            --with-hts-engine-library-path="$PWD/../hts-install/lib" \
+            --with-charset=UTF-8 $BUILD
+          make LDFLAGS="$LDF"
 
       - name: Collect binary
-        shell: bash
         run: |
           mkdir -p out
-          find open_jtalk/src/build \( -name open_jtalk -o -name open_jtalk.exe \) -type f -exec cp {} out/ \;
+          cp open_jtalk-1.11/bin/open_jtalk* out/
           ls -l out
-          test -n "$(ls out)"
 
       - name: Check dependencies
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            dumpbin //dependents out/open_jtalk.exe
-          else
-            ldd out/open_jtalk || true
-          fi
+        run: ldd out/open_jtalk* || true
 
       - uses: actions/upload-artifact@v4
         with:
