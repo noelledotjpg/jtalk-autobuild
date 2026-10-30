@@ -68,12 +68,19 @@ jobs:
             --with-hts-engine-header-path="$PWD/../hts-install/include" \
             --with-hts-engine-library-path="$PWD/../hts-install/lib" \
             --with-charset=UTF-8 $BUILD
-          make LDFLAGS="$LDF"
+          # On Windows the build trips over mecab-dict-index.exe (a dictionary-compiling tool
+          # we never use). Keep going past it, then build the real program explicitly.
+          make -k LDFLAGS="$LDF" || true
+          make -C bin LDFLAGS="$LDF"
 
       - name: Collect binary
         run: |
           mkdir -p out
-          cp open_jtalk-1.11/bin/open_jtalk* out/
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp open_jtalk-1.11/bin/open_jtalk.exe out/
+          else
+            cp open_jtalk-1.11/bin/open_jtalk out/
+          fi
           ls -l out
 
       - name: Check dependencies
